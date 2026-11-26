@@ -9,6 +9,7 @@ import androidx.core.content.ContextCompat
 import com.quickstart.md3.data.AppRepository
 import com.quickstart.md3.data.DataStoreRepository
 import com.quickstart.md3.data.KeySoundPlayer
+import com.quickstart.md3.service.FloatingBubbleService
 import com.quickstart.md3.service.OverlayPanelHost
 import com.quickstart.md3.shizuku.ShizukuManager
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -37,6 +38,10 @@ class QuickStartApp : Application() {
         overlayHost = OverlayPanelHost(this)
         ShizukuManager.init(this)
         registerPackageWatcher()
+        val initialSettings = store.loadInitialSettingsSync()
+        if (FloatingBubbleService.shouldKeepServiceAlive(initialSettings)) {
+            runCatching { FloatingBubbleService.syncWithSettings(this, initialSettings) }
+        }
     }
 
     private fun registerPackageWatcher() {

@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -43,6 +44,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quickstart.md3.BuildConfig
 import com.quickstart.md3.QuickStartApp
+import com.quickstart.md3.backtap.BackTapEngine
 import com.quickstart.md3.data.*
 import com.quickstart.md3.service.FloatingBubbleService
 import com.quickstart.md3.service.QuickStartIconWidgetProvider
@@ -738,9 +740,15 @@ private fun SettingsHomeList(
         // 4. Global Triggers
         item { SectionTitle("全局唤醒方式") }
         item {
+            val powerManager = remember { ctx.getSystemService(PowerManager::class.java) }
             var canDrawOverlays by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
+            var isIgnoringBatteryOpt by remember {
+                mutableStateOf(powerManager?.isIgnoringBatteryOptimizations(ctx.packageName) == true)
+            }
+            val backTapState by BackTapEngine.runtimeState.collectAsStateWithLifecycle()
             LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
                 canDrawOverlays = Settings.canDrawOverlays(ctx)
+                isIgnoringBatteryOpt = powerManager?.isIgnoringBatteryOptimizations(ctx.packageName) == true
             }
             SettingsCard {
                 NavRow(
@@ -884,6 +892,125 @@ private fun SettingsHomeList(
                         }
                     )
                 }
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                val recentlyTriggered = backTapState.lastTriggeredAtMs > 0L &&
+                    (System.currentTimeMillis() - backTapState.lastTriggeredAtMs) < 3500L
+                val backTapSubtitle = when {
+                    !settings.backTapEnabled -> "集成 Tap, Tap (Columbus) 引擎，免无障碍轻敲机身背部两次呼出"
+                    recentlyTriggered -> "刚刚识别到双击！ · ${backTapState.status.label}"
+                    else -> "状态：${backTapState.status.label} · 无需无障碍，息屏自动休眠"
+                }
+                SwitchRow(
+                    title = "双击背部唤起快启动",
+                    subtitle = backTapSubtitle,
+                    checked = settings.backTapEnabled,
+                    onCheckedChange = { v ->
+                        val updated = settings.copy(backTapEnabled = v)
+                        onUpdate { updated }
+                        FloatingBubbleService.syncWithSettings(ctx, updated)
+                        if (v && !Settings.canDrawOverlays(ctx)) {
+                            onToast("建议授予悬浮窗权限以获得零闪屏弹窗体验")
+                        }
+                    }
+                )
+                if (settings.backTapEnabled) {
+                    SliderRow(
+                        title = "双击灵敏度 (${settings.backTapSensitivity}/10 · 数值越大越轻触即可触发)",
+                        value = settings.backTapSensitivity.toFloat(),
+                        range = 0f..10f,
+                        onChange = { v ->
+                            onUpdate { it.copy(backTapSensitivity = v.roundToInt()) }
+                        }
+                    )
+                    Column(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("机身尺寸识别模型", style = MaterialTheme.typography.bodyMedium)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(BackTapModel.entries) { model ->
+                                FilterChip(
+                                    selected = settings.backTapModel == model,
+                                    onClick = { onUpdate { it.copy(backTapModel = model) } },
+                                    label = { Text(model.label) }
+                                )
+                            }
+                        }
+                        Text(
+                            text = settings.backTapModel.desc,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    SwitchRow(
+                        title = "锁屏时自动暂停",
+                        subtitle = "未解锁时不检测双击，降低误触并省电",
+                        checked = settings.backTapPauseOnLockScreen,
+                        onCheckedChange = { v -> onUpdate { it.copy(backTapPauseOnLockScreen = v) } }
+                    )
+                    SwitchRow(
+                        title = "口袋防误触门控",
+                        subtitle = "仅在触发瞬间按需检测距离传感器，不常驻耗电",
+                        checked = settings.backTapPocketGate,
+                        onCheckedChange = { v -> onUpdate { it.copy(backTapPocketGate = v) } }
+                    )
+                    SwitchRow(
+                        title = "平放桌面时暂停",
+                        subtitle = "复用加速度计倾角判断，避免放在桌面误触",
+                        checked = settings.backTapTableGate,
+                        onCheckedChange = { v -> onUpdate { it.copy(backTapTableGate = v) } }
+                    )
+                    SwitchRow(
+                        title = "系统省电模式时自动暂停",
+                        checked = settings.backTapPauseInBatterySaver,
+                        onCheckedChange = { v -> onUpdate { it.copy(backTapPauseInBatterySaver = v) } }
+                    )
+                    SwitchRow(
+                        title = "双击触发震动反馈",
+                        checked = settings.backTapHapticEnabled,
+                        onCheckedChange = { v -> onUpdate { it.copy(backTapHapticEnabled = v) } }
+                    )
+                    SwitchRow(
+                        title = "NNAPI 低功耗推理加速",
+                        subtitle = "利用系统低功耗协处理器运行模型，异常时自动回退 CPU",
+                        checked = settings.backTapLowPowerDelegate,
+                        onCheckedChange = { v -> onUpdate { it.copy(backTapLowPowerDelegate = v) } }
+                    )
+                    SwitchRow(
+                        title = "开机 / 更新后自动恢复双击监听",
+                        checked = settings.backTapBootStart,
+                        onCheckedChange = { v -> onUpdate { it.copy(backTapBootStart = v) } }
+                    )
+                }
+                NavRow(
+                    icon = Icons.Rounded.BatteryChargingFull,
+                    title = "后台保活：忽略电池优化",
+                    subtitle = if (isIgnoringBatteryOpt) {
+                        "已加入电池优化白名单 · 建议同时在最近任务中锁定本应用"
+                    } else {
+                        "未忽略电池优化 · 点此放行以防系统杀后台导致双击失效"
+                    },
+                    onClick = {
+                        if (isIgnoringBatteryOpt) {
+                            onToast("已处于电池优化白名单中")
+                        } else {
+                            runCatching {
+                                ctx.startActivity(
+                                    Intent(
+                                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                        Uri.parse("package:${ctx.packageName}")
+                                    )
+                                )
+                            }.onFailure {
+                                runCatching {
+                                    ctx.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                }.onFailure {
+                                    onToast("请在系统电池设置中允许快启动后台运行")
+                                }
+                            }
+                        }
+                    }
+                )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 SwitchRow(
                     title = "开启悬浮球",

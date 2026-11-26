@@ -49,6 +49,14 @@ enum class WidgetIconStyle(val label: String) {
     TRANSPARENT("隐形透明")
 }
 
+@Serializable
+enum class BackTapModel(val label: String, val assetPath: String, val desc: String) {
+    CORAL("大屏 6.3\"+", "columbus/tap7cls_coral.tflite", "Pixel 4 XL 模型，适合主流 6.3 英寸以上大屏手机"),
+    BRAMBLE("中屏 6.1\"", "columbus/tap7cls_bramble.tflite", "Pixel 4a 5G 模型，适合中等尺寸机身"),
+    FLAME("小屏 5.8\"", "columbus/tap7cls_flame.tflite", "Pixel 4 模型，适合小屏机身"),
+    REDFIN("迷你 5.7\"", "columbus/tap7cls_redfin.tflite", "Pixel 5 模型，适合紧凑小屏机身")
+}
+
 @Immutable
 @Serializable
 data class SearchEngineItem(
@@ -345,6 +353,18 @@ data class AppSettings(
     val edgeTriggerHeightDp: Int = 130,
     val edgeTriggerWidthDp: Int = 16,
     val edgeTriggerVisibleHandle: Boolean = true,
+
+    // Double-Tap Back (Columbus / TapTap engine)
+    val backTapEnabled: Boolean = false,
+    val backTapSensitivity: Int = 6,
+    val backTapModel: BackTapModel = BackTapModel.CORAL,
+    val backTapBootStart: Boolean = true,
+    val backTapHapticEnabled: Boolean = true,
+    val backTapPocketGate: Boolean = true,
+    val backTapPauseOnLockScreen: Boolean = true,
+    val backTapPauseInBatterySaver: Boolean = true,
+    val backTapTableGate: Boolean = false,
+    val backTapLowPowerDelegate: Boolean = true,
 
     // Privacy Vault
     val vaultPasswordHash: String = "",

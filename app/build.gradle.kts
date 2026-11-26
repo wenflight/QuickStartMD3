@@ -13,12 +13,16 @@ android {
         applicationId = "com.quickstart.md3"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.0"
+        versionCode = 4
+        versionName = "1.1.0"
 
         vectorDrawables {
             useSupportLibrary = true
         }
+    }
+
+    androidResources {
+        noCompress += "tflite"
     }
 
     signingConfigs {
@@ -95,6 +99,7 @@ dependencies {
     implementation("dev.rikka.shizuku:provider:13.1.5")
 
     implementation("com.belerweb:pinyin4j:2.5.1")
+    implementation("org.tensorflow:tensorflow-lite:2.16.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")

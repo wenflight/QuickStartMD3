@@ -1,6 +1,7 @@
 package com.quickstart.md3.service
 
 import android.annotation.SuppressLint
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -16,6 +17,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -30,6 +32,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.quickstart.md3.QuickStartApp
 import com.quickstart.md3.R
+import com.quickstart.md3.backtap.BackTapEngine
 import com.quickstart.md3.data.AppSettings
 import com.quickstart.md3.data.EdgeTriggerSide
 import com.quickstart.md3.ui.main.MainActivity
@@ -51,6 +54,9 @@ class FloatingBubbleService : Service() {
     private var rightEdgeView: FrameLayout? = null
     private var lastEdgeConfigKey: String? = null
     private var bubbleHidden = false
+    private var backTapEngine: BackTapEngine? = null
+    @Volatile
+    private var latestSettings: AppSettings = AppSettings()
     private val appOverlayHost: OverlayPanelHost
         get() = (application as QuickStartApp).overlayHost
     private val handler = Handler(Looper.getMainLooper())
@@ -64,6 +70,21 @@ class FloatingBubbleService : Service() {
         super.onCreate()
         windowManager = getSystemService(WindowManager::class.java)
         ensureChannel()
+        val app = application as QuickStartApp
+        latestSettings = app.store.loadInitialSettingsSync()
+        backTapEngine = BackTapEngine(this) {
+            if (latestSettings.backTapHapticEnabled) {
+                vibratePulse(18L)
+            }
+            toggleOverlay(this)
+        }.apply {
+            updateConfig(latestSettings)
+        }
+        scope.launch {
+            app.store.settingsFlow.collect { s ->
+                applySettings(s)
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -73,13 +94,18 @@ class FloatingBubbleService : Service() {
             ACTION_STOP -> {
                 appOverlayHost.hide()
                 removeBubble()
+                removeEdgeTriggers()
+                backTapEngine?.destroy()
+                backTapEngine = null
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
             }
         }
 
-        val notif = buildNotification()
+        val app = application as QuickStartApp
+        latestSettings = app.store.loadInitialSettingsSync()
+        val notif = buildNotification(latestSettings)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
@@ -93,29 +119,57 @@ class FloatingBubbleService : Service() {
         }
 
         scope.launch {
-            val s = (application as QuickStartApp).store.settingsFlow.first()
-            if (!s.floatingBubbleEnabled && !s.notificationEnabled && !s.edgeTriggerEnabled) {
-                removeBubble()
-                removeEdgeTriggers()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-                return@launch
-            }
-            if (s.floatingBubbleEnabled && !bubbleHidden && Settings.canDrawOverlays(this@FloatingBubbleService)) {
-                showOrUpdateBubble(s)
-            } else {
-                removeBubble()
-            }
-            syncEdgeTriggers(s)
-            val nm = getSystemService(NotificationManager::class.java)
-            nm?.notify(NOTIF_ID, buildNotification())
+            val s = app.store.settingsFlow.first()
+            applySettings(s)
         }
         return START_STICKY
+    }
+
+    private fun applySettings(s: AppSettings) {
+        latestSettings = s
+        if (!shouldKeepServiceAlive(s)) {
+            removeBubble()
+            removeEdgeTriggers()
+            backTapEngine?.updateConfig(s)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return
+        }
+        backTapEngine?.updateConfig(s)
+        if (s.floatingBubbleEnabled && !bubbleHidden && Settings.canDrawOverlays(this)) {
+            showOrUpdateBubble(s)
+        } else {
+            removeBubble()
+        }
+        syncEdgeTriggers(s)
+        val nm = getSystemService(NotificationManager::class.java)
+        nm?.notify(NOTIF_ID, buildNotification(s))
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        val s = (application as QuickStartApp).store.loadInitialSettingsSync()
+        if (!shouldKeepServiceAlive(s)) return
+
+        val restartIntent = Intent(applicationContext, FloatingBubbleService::class.java)
+        val pi = PendingIntent.getForegroundService(
+            applicationContext,
+            RESTART_REQ_CODE,
+            restartIntent,
+            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+        )
+        runCatching {
+            val am = getSystemService(AlarmManager::class.java)
+            am?.set(AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + 500L, pi)
+        }
+        runCatching { ContextCompat.startForegroundService(applicationContext, restartIntent) }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(fadeRunnable)
+        backTapEngine?.destroy()
+        backTapEngine = null
         removeBubble()
         removeEdgeTriggers()
         scope.cancel()
@@ -133,8 +187,8 @@ class FloatingBubbleService : Service() {
         nm.createNotificationChannel(ch)
     }
 
-    private fun buildNotification(): Notification {
-        val pi = if (bubbleHidden) {
+    private fun buildNotification(settings: AppSettings = latestSettings): Notification {
+        val pi = if (bubbleHidden && settings.floatingBubbleEnabled) {
             val restoreIntent = Intent(this, FloatingBubbleService::class.java).setAction(ACTION_RESTORE_BUBBLE)
             PendingIntent.getService(this, 1, restoreIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         } else {
@@ -142,11 +196,16 @@ class FloatingBubbleService : Service() {
         }
 
         val openMainPi = QuickStartIconWidgetProvider.togglePendingIntent(this, requestCode = 3)
+        val contentText = when {
+            bubbleHidden && settings.floatingBubbleEnabled -> "悬浮球已隐藏，点击恢复显示"
+            settings.backTapEnabled -> "双击手机背部即可呼出快启动 · 点击打开"
+            else -> "点击极速搜索并启动应用"
+        }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_tile_qs)
             .setContentTitle("快启动 MD3")
-            .setContentText(if (bubbleHidden) "悬浮球已隐藏，点击恢复显示" else "点击极速搜索并启动应用")
+            .setContentText(contentText)
             .setOngoing(true)
             .setSilent(true)
             .setContentIntent(pi)
@@ -353,7 +412,7 @@ class FloatingBubbleService : Service() {
                         val inwardOk = if (isLeft) dx > thresholdPx else -dx > thresholdPx
                         if (inwardOk && abs(dx) > abs(dy) * 1.15f) {
                             triggered = true
-                            vibrateEdgeTick()
+                            vibratePulse(14L)
                             appOverlayHost.toggle()
                         }
                     }
@@ -366,7 +425,7 @@ class FloatingBubbleService : Service() {
         return if (runCatching { wm.addView(container, lp) }.isSuccess) container else null
     }
 
-    private fun vibrateEdgeTick() {
+    private fun vibratePulse(durationMs: Long) {
         runCatching {
             val vib = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 getSystemService(VibratorManager::class.java)?.defaultVibrator
@@ -374,7 +433,7 @@ class FloatingBubbleService : Service() {
                 @Suppress("DEPRECATION")
                 getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
             }
-            vib?.vibrate(VibrationEffect.createOneShot(14L, VibrationEffect.DEFAULT_AMPLITUDE))
+            vib?.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
         }
     }
 
@@ -389,11 +448,18 @@ class FloatingBubbleService : Service() {
     companion object {
         private const val CHANNEL_ID = "quickstart_trigger_channel"
         private const val NOTIF_ID = 10086
+        private const val RESTART_REQ_CODE = 10087
         private const val ACTION_RESTORE_BUBBLE = "com.quickstart.md3.RESTORE_BUBBLE"
         private const val ACTION_STOP = "com.quickstart.md3.STOP_TRIGGER"
         private const val ACTION_SHOW_OVERLAY = "com.quickstart.md3.SHOW_OVERLAY"
         private const val ACTION_TOGGLE_OVERLAY = "com.quickstart.md3.TOGGLE_OVERLAY"
         private const val ACTION_HIDE_OVERLAY = "com.quickstart.md3.HIDE_OVERLAY"
+
+        fun shouldKeepServiceAlive(settings: AppSettings): Boolean =
+            settings.floatingBubbleEnabled ||
+                settings.notificationEnabled ||
+                settings.edgeTriggerEnabled ||
+                settings.backTapEnabled
 
         fun showOverlayIntent(context: Context): Intent =
             Intent(context, FloatingBubbleService::class.java).setAction(ACTION_SHOW_OVERLAY)
@@ -426,9 +492,7 @@ class FloatingBubbleService : Service() {
         }
 
         fun syncWithSettings(context: Context, settings: AppSettings) {
-            val needService = settings.floatingBubbleEnabled ||
-                settings.notificationEnabled ||
-                settings.edgeTriggerEnabled
+            val needService = shouldKeepServiceAlive(settings)
             val intent = Intent(context, FloatingBubbleService::class.java)
             if (needService) {
                 ContextCompat.startForegroundService(context, intent)

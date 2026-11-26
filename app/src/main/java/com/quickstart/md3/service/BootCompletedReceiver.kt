@@ -11,21 +11,32 @@ import kotlinx.coroutines.launch
 
 class BootCompletedReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+        val action = intent.action ?: return
+        if (action != Intent.ACTION_BOOT_COMPLETED &&
+            action != Intent.ACTION_MY_PACKAGE_REPLACED &&
+            action != ACTION_QUICKBOOT_POWERON
+        ) {
+            return
+        }
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val app = context.applicationContext as QuickStartApp
                 val s = app.store.settingsFlow.first()
-                if ((s.floatingBubbleEnabled && s.floatingBubbleBootStart) ||
+                if ((s.backTapEnabled && s.backTapBootStart) ||
+                    (s.floatingBubbleEnabled && s.floatingBubbleBootStart) ||
                     (s.notificationEnabled && s.notificationBootStart) ||
                     (s.edgeTriggerEnabled && (s.floatingBubbleBootStart || s.notificationBootStart))
                 ) {
-                    FloatingBubbleService.syncWithSettings(context, s)
+                    runCatching { FloatingBubbleService.syncWithSettings(context, s) }
                 }
             } finally {
                 pendingResult.finish()
             }
         }
+    }
+
+    companion object {
+        private const val ACTION_QUICKBOOT_POWERON = "android.intent.action.QUICKBOOT_POWERON"
     }
 }
