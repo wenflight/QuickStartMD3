@@ -78,6 +78,12 @@ class BackTapEngine(
     private var lastTriggerElapsedMs = 0L
     private var receiverRegistered = false
     private var destroyed = false
+    private var lockPollStep = 0
+
+    private val lockPollRunnable = Runnable {
+        if (destroyed) return@Runnable
+        evaluateStateLocked(forceResubscribe = true, fromLockPoll = true)
+    }
 
     private val sensorListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent?) {
@@ -176,6 +182,7 @@ class BackTapEngine(
         destroyed = true
         unregisterReceiverIfNeeded()
         sensorHandler.post {
+            cancelLockPollLocked()
             stopListeningLocked()
             releaseModelLocked()
             publishStatus(BackTapStatus.DISABLED)
@@ -184,20 +191,26 @@ class BackTapEngine(
         }
     }
 
-    private fun evaluateStateLocked(forceResubscribe: Boolean) {
+    private fun evaluateStateLocked(forceResubscribe: Boolean, fromLockPoll: Boolean = false) {
         if (destroyed) return
+        if (!fromLockPoll) {
+            cancelLockPollLocked()
+        }
         val s = currentSettings
         if (!s.backTapEnabled) {
+            cancelLockPollLocked()
             stopListeningLocked()
             publishStatus(BackTapStatus.DISABLED)
             return
         }
         if (accelerometer == null || gyroscope == null) {
+            cancelLockPollLocked()
             stopListeningLocked()
             publishStatus(BackTapStatus.UNSUPPORTED)
             return
         }
         if (!powerManager.isInteractive) {
+            cancelLockPollLocked()
             stopListeningLocked()
             publishStatus(BackTapStatus.PAUSED_SCREEN_OFF)
             return
@@ -205,8 +218,10 @@ class BackTapEngine(
         if (s.backTapPauseOnLockScreen && keyguardManager.isKeyguardLocked) {
             stopListeningLocked()
             publishStatus(BackTapStatus.PAUSED_LOCKED)
+            scheduleNextLockPollLocked()
             return
         }
+        cancelLockPollLocked()
         if (s.backTapPauseInBatterySaver && powerManager.isPowerSaveMode) {
             stopListeningLocked()
             publishStatus(BackTapStatus.PAUSED_BATTERY_SAVER)
@@ -217,6 +232,19 @@ class BackTapEngine(
             startListeningLocked()
         }
         publishStatus(if (isListening) BackTapStatus.ACTIVE else BackTapStatus.UNSUPPORTED)
+    }
+
+    private fun scheduleNextLockPollLocked() {
+        if (lockPollStep >= LOCK_POLL_DELAYS_MS.size) return
+        val delayMs = LOCK_POLL_DELAYS_MS[lockPollStep]
+        lockPollStep++
+        sensorHandler.removeCallbacks(lockPollRunnable)
+        sensorHandler.postDelayed(lockPollRunnable, delayMs)
+    }
+
+    private fun cancelLockPollLocked() {
+        sensorHandler.removeCallbacks(lockPollRunnable)
+        lockPollStep = 0
     }
 
     private fun startListeningLocked() {
@@ -358,7 +386,7 @@ class BackTapEngine(
                 appContext,
                 stateReceiver,
                 filter,
-                ContextCompat.RECEIVER_NOT_EXPORTED
+                ContextCompat.RECEIVER_EXPORTED
             )
             receiverRegistered = true
         }
@@ -383,6 +411,7 @@ class BackTapEngine(
         private const val FIFO_BATCH_LATENCY_US = 20_000
         private const val TRIGGER_COOLDOWN_MS = 650L
         private const val PROXIMITY_TIMEOUT_MS = 30L
+        private val LOCK_POLL_DELAYS_MS = longArrayOf(400L, 800L, 1300L)
 
         private val _runtimeState = MutableStateFlow(BackTapRuntimeState())
         val runtimeState: StateFlow<BackTapRuntimeState> = _runtimeState.asStateFlow()
