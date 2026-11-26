@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="widget_icon_bg_color">#EADDFF</color>
+    <color name="widget_icon_tint">#4F378B</color>
+
+    <!-- 4x1 Minimal Neutral Translucent Pill (Light) -->
+    <color name="widget_bar_bg_color">#B8FFFFFF</color>
+    <color name="widget_bar_stroke_color">#4DFFFFFF</color>
+    <color name="widget_bar_pill_bg">#12000000</color>
+    <color name="widget_bar_divider_color">#1F000000</color>
+    <color name="widget_bar_accent_tint">#4F378B</color>
+    <color name="widget_bar_icon_tint">#B33C4043</color>
+    <color name="widget_bar_hint_color">#993C4043</color>
+</resources>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">快启动 MD3</string>
+    <string name="settings_title">快启动设置</string>
+    <string name="widget_name">快启动搜索栏</string>
+    <string name="widget_icon_name">快启动 1×1 悬浮图标</string>
+    <string name="widget_hint">点击极速搜索应用 (T9 / 拼音)</string>
+    <string name="widget_hint_minimal">搜索</string>
+</resources>

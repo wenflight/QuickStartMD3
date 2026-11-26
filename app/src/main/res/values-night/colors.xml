@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 4x1 Minimal Neutral Translucent Pill (Dark) -->
+    <color name="widget_bar_bg_color">#A61C1B1F</color>
+    <color name="widget_bar_stroke_color">#26FFFFFF</color>
+    <color name="widget_bar_pill_bg">#1AFFFFFF</color>
+    <color name="widget_bar_divider_color">#24FFFFFF</color>
+    <color name="widget_bar_accent_tint">#D0BCFF</color>
+    <color name="widget_bar_icon_tint">#CCE6E1E5</color>
+    <color name="widget_bar_hint_color">#99E6E1E5</color>
+</resources>

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_icon_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="2dp">
+
+    <FrameLayout
+        android:id="@+id/widget_icon_box"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:background="@drawable/widget_icon_monet_bg">
+
+        <ImageView
+            android:id="@+id/widget_icon_image"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:layout_gravity="center"
+            android:contentDescription="@string/app_name"
+            android:src="@drawable/ic_tile_qs"
+            android:tint="@color/widget_icon_tint" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/widget_icon_label"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="3dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:shadowColor="#80000000"
+        android:shadowDx="0"
+        android:shadowDy="1"
+        android:shadowRadius="2"
+        android:text="快启动"
+        android:textColor="@android:color/white"
+        android:textSize="11sp" />
+
+</LinearLayout>

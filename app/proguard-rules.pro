@@ -1,0 +1,3 @@
+-keep class com.quickstart.md3.shizuku.ShizukuShellService { *; }
+-keep class com.quickstart.md3.shizuku.IShizukuShellService** { *; }
+-keepattributes *Annotation*

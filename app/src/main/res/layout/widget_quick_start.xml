@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="42dp"
+        android:layout_gravity="bottom"
+        android:layout_marginStart="6dp"
+        android:layout_marginEnd="6dp"
+        android:background="@drawable/widget_bg"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="5dp"
+        android:paddingEnd="5dp">
+
+        <FrameLayout
+            android:id="@+id/widget_left_t9"
+            android:layout_width="36dp"
+            android:layout_height="match_parent"
+            android:contentDescription="T9 快速搜索">
+
+            <FrameLayout
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_gravity="center"
+                android:background="@drawable/widget_bar_left_bg">
+
+                <ImageView
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_tile_qs"
+                    android:tint="@color/widget_bar_accent_tint" />
+            </FrameLayout>
+        </FrameLayout>
+
+        <FrameLayout
+            android:id="@+id/widget_shortcuts"
+            android:layout_width="36dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="2dp"
+            android:contentDescription="直达快捷方式">
+
+            <FrameLayout
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_gravity="center"
+                android:background="@drawable/widget_bar_left_bg">
+
+                <ImageView
+                    android:layout_width="17dp"
+                    android:layout_height="17dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_widget_shortcuts"
+                    android:tint="@color/widget_bar_icon_tint" />
+            </FrameLayout>
+        </FrameLayout>
+
+        <ImageView
+            android:layout_width="1dp"
+            android:layout_height="16dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:background="@color/widget_bar_divider_color"
+            android:contentDescription="@null" />
+
+        <LinearLayout
+            android:id="@+id/widget_right_ime"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:contentDescription="键盘搜索"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="6dp"
+            android:paddingEnd="10dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_hint_minimal"
+                android:textColor="@color/widget_bar_hint_color"
+                android:textSize="13sp" />
+
+            <ImageView
+                android:layout_width="17dp"
+                android:layout_height="17dp"
+                android:src="@drawable/ic_widget_search"
+                android:tint="@color/widget_bar_icon_tint" />
+        </LinearLayout>
+
+    </LinearLayout>
+
+</FrameLayout>
