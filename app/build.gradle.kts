@@ -21,8 +21,22 @@ android {
         }
     }
 
+    signingConfigs {
+        // Only configured when CI provides the keystore via environment variables.
+        val ksPath = System.getenv("KEYSTORE_PATH")
+        if (ksPath != null) {
+            create("release") {
+                storeFile = file(ksPath)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
