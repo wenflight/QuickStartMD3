@@ -96,12 +96,18 @@ fun SettingsScreen(
         scope.launch { store.updateSettings(transform) }
     }
 
+    fun updateAndSyncService(transform: (AppSettings) -> AppSettings) {
+        scope.launch {
+            val updated = store.updateSettings(transform)
+            FloatingBubbleService.syncWithSettings(ctx, updated)
+        }
+    }
+
     val notificationPermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            update { it.copy(notificationEnabled = true) }
-            FloatingBubbleService.syncWithSettings(ctx, settings.copy(notificationEnabled = true))
+            updateAndSyncService { it.copy(notificationEnabled = true) }
         } else {
             toast("未授予通知权限")
         }
@@ -169,6 +175,7 @@ fun SettingsScreen(
                 polyCount = polyphones.size,
                 hiddenCount = hiddenPackages.size,
                 onUpdate = ::update,
+                onUpdateAndSyncService = ::updateAndSyncService,
                 onToast = ::toast,
                 onNavigate = { subPage = it },
                 onRequestNotification = {
@@ -178,9 +185,7 @@ fun SettingsScreen(
                     ) {
                         notificationPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     } else {
-                        val next = !settings.notificationEnabled
-                        update { it.copy(notificationEnabled = next) }
-                        FloatingBubbleService.syncWithSettings(ctx, settings.copy(notificationEnabled = next))
+                        updateAndSyncService { it.copy(notificationEnabled = !it.notificationEnabled) }
                     }
                 },
                 onRequestContacts = {
@@ -254,6 +259,7 @@ private fun SettingsHomeList(
     polyCount: Int,
     hiddenCount: Int,
     onUpdate: ((AppSettings) -> AppSettings) -> Unit,
+    onUpdateAndSyncService: ((AppSettings) -> AppSettings) -> Unit,
     onToast: (String) -> Unit,
     onNavigate: (SettingsSubPage) -> Unit,
     onRequestNotification: () -> Unit,
@@ -828,9 +834,7 @@ private fun SettingsHomeList(
                             )
                             onToast("请先授予悬浮窗权限")
                         } else {
-                            val updated = settings.copy(edgeTriggerEnabled = v)
-                            onUpdate { updated }
-                            FloatingBubbleService.syncWithSettings(ctx, updated)
+                            onUpdateAndSyncService { it.copy(edgeTriggerEnabled = v) }
                         }
                     }
                 )
@@ -841,11 +845,7 @@ private fun SettingsHomeList(
                             EdgeTriggerSide.entries.forEach { side ->
                                 FilterChip(
                                     selected = settings.edgeTriggerSide == side,
-                                    onClick = {
-                                        val updated = settings.copy(edgeTriggerSide = side)
-                                        onUpdate { updated }
-                                        FloatingBubbleService.syncWithSettings(ctx, updated)
-                                    },
+                                    onClick = { onUpdateAndSyncService { it.copy(edgeTriggerSide = side) } },
                                     label = { Text(side.label) }
                                 )
                             }
@@ -855,41 +855,25 @@ private fun SettingsHomeList(
                         title = "触发条上下位置 (${(settings.edgeTriggerPosition * 100).roundToInt()}%)",
                         value = settings.edgeTriggerPosition,
                         range = 0f..1f,
-                        onChange = { v ->
-                            val updated = settings.copy(edgeTriggerPosition = v)
-                            onUpdate { updated }
-                            FloatingBubbleService.syncWithSettings(ctx, updated)
-                        }
+                        onChange = { v -> onUpdateAndSyncService { it.copy(edgeTriggerPosition = v) } }
                     )
                     SliderRow(
                         title = "触发条长度 (${settings.edgeTriggerHeightDp} dp)",
                         value = settings.edgeTriggerHeightDp.toFloat(),
                         range = 60f..260f,
-                        onChange = { v ->
-                            val updated = settings.copy(edgeTriggerHeightDp = v.roundToInt())
-                            onUpdate { updated }
-                            FloatingBubbleService.syncWithSettings(ctx, updated)
-                        }
+                        onChange = { v -> onUpdateAndSyncService { it.copy(edgeTriggerHeightDp = v.roundToInt()) } }
                     )
                     SliderRow(
                         title = "触发热区宽度/灵敏度 (${settings.edgeTriggerWidthDp} dp)",
                         value = settings.edgeTriggerWidthDp.toFloat(),
                         range = 10f..28f,
-                        onChange = { v ->
-                            val updated = settings.copy(edgeTriggerWidthDp = v.roundToInt())
-                            onUpdate { updated }
-                            FloatingBubbleService.syncWithSettings(ctx, updated)
-                        }
+                        onChange = { v -> onUpdateAndSyncService { it.copy(edgeTriggerWidthDp = v.roundToInt()) } }
                     )
                     SwitchRow(
                         title = "显示微弱侧边提示条",
                         subtitle = "关闭则完全隐形盲滑触发",
                         checked = settings.edgeTriggerVisibleHandle,
-                        onCheckedChange = { v ->
-                            val updated = settings.copy(edgeTriggerVisibleHandle = v)
-                            onUpdate { updated }
-                            FloatingBubbleService.syncWithSettings(ctx, updated)
-                        }
+                        onCheckedChange = { v -> onUpdateAndSyncService { it.copy(edgeTriggerVisibleHandle = v) } }
                     )
                 }
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
@@ -905,9 +889,7 @@ private fun SettingsHomeList(
                     subtitle = backTapSubtitle,
                     checked = settings.backTapEnabled,
                     onCheckedChange = { v ->
-                        val updated = settings.copy(backTapEnabled = v)
-                        onUpdate { updated }
-                        FloatingBubbleService.syncWithSettings(ctx, updated)
+                        onUpdateAndSyncService { it.copy(backTapEnabled = v) }
                         if (v && !Settings.canDrawOverlays(ctx)) {
                             onToast("建议授予悬浮窗权限以获得零闪屏弹窗体验")
                         }
@@ -1023,9 +1005,7 @@ private fun SettingsHomeList(
                             )
                             onToast("请先授予悬浮窗权限")
                         } else {
-                            val updated = settings.copy(floatingBubbleEnabled = v)
-                            onUpdate { updated }
-                            FloatingBubbleService.syncWithSettings(ctx, updated)
+                            onUpdateAndSyncService { it.copy(floatingBubbleEnabled = v) }
                         }
                     }
                 )
@@ -1033,9 +1013,7 @@ private fun SettingsHomeList(
                     title = "悬浮球自动贴边",
                     checked = settings.floatingBubbleSnapEdge,
                     onCheckedChange = { v ->
-                        val updated = settings.copy(floatingBubbleSnapEdge = v)
-                        onUpdate { updated }
-                        FloatingBubbleService.syncWithSettings(ctx, updated)
+                        onUpdateAndSyncService { it.copy(floatingBubbleSnapEdge = v) }
                     }
                 )
                 SwitchRow(

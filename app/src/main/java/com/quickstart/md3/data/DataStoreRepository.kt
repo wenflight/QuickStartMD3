@@ -156,8 +156,8 @@ class DataStoreRepository(context: Context) {
         loadedDeferred.await()
     }
 
-    suspend fun updateSettings(transform: (AppSettings) -> AppSettings) {
-        var updatedValue: AppSettings? = null
+    suspend fun updateSettings(transform: (AppSettings) -> AppSettings): AppSettings {
+        var updatedValue = AppSettings()
         appContext.dataStore.edit { prefs ->
             val raw = prefs[keySettings]
             val current = raw?.let {
@@ -170,7 +170,8 @@ class DataStoreRepository(context: Context) {
             updatedValue = next
             prefs[keySettings] = json.encodeToString(next)
         }
-        updatedValue?.let { writeJsonFile("settings_sync.json", it) }
+        writeJsonFile("settings_sync.json", updatedValue)
+        return updatedValue
     }
 
     fun loadInitialSettingsSync(): AppSettings {
