@@ -50,11 +50,29 @@ enum class WidgetIconStyle(val label: String) {
 }
 
 @Serializable
-enum class BackTapModel(val label: String, val assetPath: String, val desc: String) {
-    CORAL("大屏 6.3\"+", "columbus/tap7cls_coral.tflite", "Pixel 4 XL 模型，适合主流 6.3 英寸以上大屏手机"),
+enum class BackTapModel(
+    val label: String,
+    val assetPath: String,
+    val desc: String,
+    val isSamsung: Boolean = false
+) {
+    SAMSUNG(
+        "通用旗舰 (推荐)",
+        "samsung/backtap_20221018-160917.tflite",
+        "三星 RegiStar 通用引擎，仅需加速度计更省电，大屏/国产旗舰识别率更高",
+        isSamsung = true
+    ),
+    CROSSHATCH(
+        "大屏完整版 6.2\"+",
+        "columbus/tap7cls_crosshatch.tflite",
+        "Pixel 3 XL 660KB 完整模型，识别率高于轻量版"
+    ),
+    CORAL("大屏轻量 6.3\"+", "columbus/tap7cls_coral.tflite", "Pixel 4 XL 轻量模型，适合主流 6.3 英寸以上大屏手机"),
     BRAMBLE("中屏 6.1\"", "columbus/tap7cls_bramble.tflite", "Pixel 4a 5G 模型，适合中等尺寸机身"),
     FLAME("小屏 5.8\"", "columbus/tap7cls_flame.tflite", "Pixel 4 模型，适合小屏机身"),
-    REDFIN("迷你 5.7\"", "columbus/tap7cls_redfin.tflite", "Pixel 5 模型，适合紧凑小屏机身")
+    REDFIN("迷你 5.7\"", "columbus/tap7cls_redfin.tflite", "Pixel 5 模型，适合紧凑小屏机身");
+
+    val requiresGyroscope: Boolean get() = !isSamsung
 }
 
 @Immutable
@@ -267,7 +285,7 @@ data class AppSettings(
     val widgetShowLabel: Boolean = true,
 
     // Window
-    val settingsVersion: Int = 5,
+    val settingsVersion: Int = 7,
     val windowMode: WindowMode = WindowMode.BOTTOM_LARGE,
     val windowVerticalPosition: Float = 1.0f,
     val customWidthPercent: Int = 92,
@@ -357,14 +375,14 @@ data class AppSettings(
     // Double-Tap Back (Columbus / TapTap engine)
     val backTapEnabled: Boolean = false,
     val backTapSensitivity: Int = 6,
-    val backTapModel: BackTapModel = BackTapModel.CORAL,
+    val backTapModel: BackTapModel = BackTapModel.SAMSUNG,
     val backTapBootStart: Boolean = true,
     val backTapHapticEnabled: Boolean = true,
     val backTapPocketGate: Boolean = true,
     val backTapPauseOnLockScreen: Boolean = true,
     val backTapPauseInBatterySaver: Boolean = true,
     val backTapTableGate: Boolean = false,
-    val backTapLowPowerDelegate: Boolean = true,
+    val backTapLowPowerDelegate: Boolean = false,
 
     // Privacy Vault
     val vaultPasswordHash: String = "",

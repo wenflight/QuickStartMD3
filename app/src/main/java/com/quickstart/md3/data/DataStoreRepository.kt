@@ -108,6 +108,18 @@ class DataStoreRepository(context: Context) {
                 searchEngines = updatedEngines
             )
         }
+        if (s.settingsVersion < 6) {
+            s = s.copy(
+                settingsVersion = 6,
+                backTapLowPowerDelegate = false
+            )
+        }
+        if (s.settingsVersion < 7) {
+            s = s.copy(
+                settingsVersion = 7,
+                backTapModel = BackTapModel.SAMSUNG
+            )
+        }
         return s
     }
 
@@ -166,7 +178,7 @@ class DataStoreRepository(context: Context) {
                     migrateSettings(it, dec)
                 }.getOrNull()
             } ?: AppSettings()
-            val next = transform(current).copy(settingsVersion = 5)
+            val next = transform(current).copy(settingsVersion = 7)
             updatedValue = next
             prefs[keySettings] = json.encodeToString(next)
         }

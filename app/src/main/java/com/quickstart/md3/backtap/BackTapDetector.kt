@@ -2,9 +2,24 @@ package com.quickstart.md3.backtap
 
 import android.hardware.Sensor
 import java.util.ArrayDeque
+import kotlin.math.abs
 import kotlin.math.acos
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+
+interface TapDetectorStrategy {
+    val requiresGyroscope: Boolean
+    val isFlatOnTable: Boolean
+    fun setSensitivity(sensitivityLevel: Int)
+    fun reset()
+    fun onSensorSample(
+        sensorType: Int,
+        x: Float,
+        y: Float,
+        z: Float,
+        timestampNs: Long
+    ): Boolean
+}
 
 /**
  * Pure Columbus ML TapRT double-tap pipeline adapted from KieronQuinn/TapTap.
@@ -12,8 +27,10 @@ import kotlin.math.sqrt
  * flat-on-table inclination inline from accelerometer samples.
  */
 class BackTapDetector(
-    private var classifier: TapClassifier
-) {
+    private var classifier: TapClassifier,
+    private val onDiagLog: ((String) -> Unit)? = null
+) : TapDetectorStrategy {
+    override val requiresGyroscope: Boolean = true
     private val resampleAcc = Resample3C()
     private val resampleGyro = Resample3C()
     private val slopeAcc = Slope3C()
@@ -48,7 +65,7 @@ class BackTapDetector(
 
     private var lastFlatCheckNs = 0L
     @Volatile
-    var isFlatOnTable: Boolean = false
+    override var isFlatOnTable: Boolean = false
         private set
 
     init {
@@ -68,7 +85,7 @@ class BackTapDetector(
         reset()
     }
 
-    fun setSensitivity(sensitivityLevel: Int) {
+    override fun setSensitivity(sensitivityLevel: Int) {
         val idx = sensitivityLevel.coerceIn(0, SENSITIVITY_VALUES.lastIndex)
         peakDetectorPositive.setMinNoiseTolerate(SENSITIVITY_VALUES[idx])
     }
@@ -78,7 +95,7 @@ class BackTapDetector(
         reset()
     }
 
-    fun reset() {
+    override fun reset() {
         xsAcc.clear()
         ysAcc.clear()
         zsAcc.clear()
@@ -94,7 +111,7 @@ class BackTapDetector(
         backTapTimestamps.clear()
     }
 
-    fun onSensorSample(
+    override fun onSensorSample(
         sensorType: Int,
         x: Float,
         y: Float,
@@ -144,16 +161,29 @@ class BackTapDetector(
         if (sensorType == Sensor.TYPE_ACCELEROMETER) {
             while (resampleAcc.update(x, y, z, timestampNs)) {
                 processAccAndKeySignal()
+                val pred = recognizeTapML()
+                if (pred.classIndex == TAP_CLASS_BACK) {
+                    backTapTimestamps.addLast(timestampNs)
+                    onDiagLog?.invoke("BackTap recorded (acc) queue=${backTapTimestamps.size}")
+                }
             }
         } else {
             while (resampleGyro.update(x, y, z, timestampNs)) {
                 processGyro()
             }
+            val pred = recognizeTapML()
+            if (pred.classIndex == TAP_CLASS_BACK) {
+                backTapTimestamps.addLast(timestampNs)
+                onDiagLog?.invoke("BackTap recorded (gyro) queue=${backTapTimestamps.size}")
+            }
         }
 
-        val predictedClass = recognizeTapML()
-        if (predictedClass == TAP_CLASS_BACK) {
-            backTapTimestamps.addLast(timestampNs)
+        if (abs(resampleAcc.tResampledLast - resampleGyro.tResampledLast) > DRIFT_RESET_NS) {
+            onDiagLog?.invoke(
+                "Reset due to acc/gyro drift=${(resampleAcc.tResampledLast - resampleGyro.tResampledLast) / 1_000_000L}ms"
+            )
+            reset()
+            return false
         }
 
         return checkDoubleTapTiming(timestampNs) == 2
@@ -207,7 +237,7 @@ class BackTapDetector(
         zsGyro.trimTo(maxWindow)
     }
 
-    private fun recognizeTapML(): Int {
+    private fun recognizeTapML(): TapPrediction {
         val resampleInterval = resampleAcc.interval.coerceAtLeast(1L)
         val resampleOffset = ((resampleAcc.tResampledLast - resampleGyro.tResampledLast) / resampleInterval).toInt()
         val majorPeakId = peakDetectorPositive.idMajorPeak
@@ -220,13 +250,18 @@ class BackTapDetector(
         val accSize = zsAcc.size
         val gyroSize = xsGyro.size
 
-        if (adjustedPeakId >= 0 &&
-            adjustedGyroStart >= 0 &&
-            adjustedPeakId + SIZE_FEATURE_WINDOW < accSize &&
-            adjustedGyroStart + SIZE_FEATURE_WINDOW <= gyroSize &&
-            wasPeakApproaching &&
-            majorPeakId <= FRAME_ALIGN_PEAK
-        ) {
+        if (wasPeakApproaching && majorPeakId in 0..FRAME_ALIGN_PEAK) {
+            if (adjustedPeakId < 0 ||
+                adjustedGyroStart < 0 ||
+                adjustedPeakId + SIZE_FEATURE_WINDOW >= accSize ||
+                adjustedGyroStart + SIZE_FEATURE_WINDOW > gyroSize
+            ) {
+                onDiagLog?.invoke(
+                    "Peak skipped align: major=$majorPeakId adj=$adjustedPeakId gyroStart=$adjustedGyroStart offset=$resampleOffset accSize=$accSize gyroSize=$gyroSize"
+                )
+                return TapPrediction(TAP_CLASS_OTHERS)
+            }
+
             wasPeakApproaching = false
             xsAcc.copyWindow(adjustedPeakId, SIZE_FEATURE_WINDOW, featureVector, 0)
             ysAcc.copyWindow(adjustedPeakId, SIZE_FEATURE_WINDOW, featureVector, SIZE_FEATURE_WINDOW)
@@ -239,16 +274,22 @@ class BackTapDetector(
                 featureVector[i] *= GYRO_SCALE
             }
 
-            return classifier.predictClass(featureVector)
+            val pred = classifier.predict(featureVector)
+            onDiagLog?.invoke(
+                "Tap ML: cls=${pred.classIndex} backScore=${"%.3f".format(pred.backScore)} topScore=${"%.3f".format(pred.topScore)} offset=$resampleOffset"
+            )
+            return pred
         }
-        return TAP_CLASS_OTHERS
+        return TapPrediction(TAP_CLASS_OTHERS)
     }
 
     fun checkDoubleTapTiming(timestampNs: Long): Int {
         while (backTapTimestamps.isNotEmpty()) {
             val first = backTapTimestamps.peekFirst() ?: break
+            val ageMs = (timestampNs - first) / 1_000_000L
             if (timestampNs - first > MAX_TIME_GAP_NS) {
                 backTapTimestamps.removeFirst()
+                onDiagLog?.invoke("BackTap expired age=${ageMs}ms")
             } else {
                 break
             }
@@ -257,7 +298,9 @@ class BackTapDetector(
 
         val newest = backTapTimestamps.peekLast() ?: return 0
         for (past in backTapTimestamps) {
+            val gapMs = (newest - past) / 1_000_000L
             if (newest - past > MIN_TIME_GAP_NS) {
+                onDiagLog?.invoke("DoubleTap HIT gap=${gapMs}ms")
                 backTapTimestamps.clear()
                 return 2
             }
@@ -281,6 +324,7 @@ class BackTapDetector(
         private const val RING_CAPACITY = 96
         private const val PEAK_WINDOW_SIZE = 64
         private const val RESUME_GAP_RESET_NS = 500_000_000L
+        private const val DRIFT_RESET_NS = 100_000_000L
         private const val FLAT_CHECK_INTERVAL_NS = 500_000_000L
 
         val SENSITIVITY_VALUES = floatArrayOf(

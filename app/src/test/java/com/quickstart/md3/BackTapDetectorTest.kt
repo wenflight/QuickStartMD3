@@ -3,6 +3,7 @@ package com.quickstart.md3
 import android.hardware.Sensor
 import com.quickstart.md3.backtap.BackTapDetector
 import com.quickstart.md3.backtap.FloatRingBuffer
+import com.quickstart.md3.backtap.SamsungBackTapDetector
 import com.quickstart.md3.backtap.TapClassifier
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -119,6 +120,63 @@ class BackTapDetectorTest {
 
         // Upright held in hand 600ms later: y ~= 9.8, z ~= 0
         detector.onSensorSample(Sensor.TYPE_ACCELEROMETER, 0f, 9.8f, 0.2f, 1_600_000_000L)
+        assertFalse(detector.isFlatOnTable)
+    }
+
+    @Test
+    fun samsungDetectorRequiresOnlyAccelerometerAndDetectsDoubleTap() {
+        var predictCount = 0
+        val fakeClassifier = object : TapClassifier {
+            override fun predictClass(features: FloatArray): Int {
+                assertEquals(288, features.size)
+                predictCount++
+                return SamsungBackTapDetector.TAP_CLASS_SAMSUNG
+            }
+
+            override fun close() = Unit
+        }
+
+        val detector = SamsungBackTapDetector(fakeClassifier, sensitivityLevel = 6)
+        assertFalse(detector.requiresGyroscope)
+
+        var ts = 1_000_000_000L
+        val stepNs = 2_500_000L
+
+        fun feedIdle(samples: Int, y: Float = 9.8f, z: Float = 0.5f): Boolean {
+            var hit = false
+            repeat(samples) {
+                if (detector.onSensorSample(Sensor.TYPE_ACCELEROMETER, 0.1f, y, z, ts)) {
+                    hit = true
+                }
+                ts += stepNs
+            }
+            return hit
+        }
+
+        // Fill 400-sample baseline queue (~1 second at 400Hz).
+        assertFalse(feedIdle(420))
+
+        fun feedSingleTapAndDrain(): Boolean {
+            var hit = false
+            val wave = floatArrayOf(0f, 3.0f, 7.5f, 3.5f, 0f, -2.0f, 0f)
+            for (dz in wave) {
+                if (detector.onSensorSample(Sensor.TYPE_ACCELEROMETER, 0.1f, 9.8f, 0.5f + dz, ts)) {
+                    hit = true
+                }
+                ts += stepNs
+            }
+            if (feedIdle(32)) hit = true
+            return hit
+        }
+
+        // First tap records timestamp, no double tap yet.
+        assertFalse(feedSingleTapAndDrain())
+        assertEquals(1, predictCount)
+
+        // Second tap ~220ms later hits double tap.
+        feedIdle(50)
+        assertTrue(feedSingleTapAndDrain())
+        assertEquals(2, predictCount)
         assertFalse(detector.isFlatOnTable)
     }
 }

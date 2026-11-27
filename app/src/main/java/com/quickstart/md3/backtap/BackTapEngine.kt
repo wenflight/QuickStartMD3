@@ -15,7 +15,9 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.Process
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.content.ContextCompat
+import com.quickstart.md3.BuildConfig
 import com.quickstart.md3.data.AppSettings
 import com.quickstart.md3.data.BackTapModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -70,7 +72,7 @@ class BackTapEngine(
     @Volatile
     private var currentSettings = AppSettings()
     private var classifier: TfliteBackTapClassifier? = null
-    private var detector: BackTapDetector? = null
+    private var detector: TapDetectorStrategy? = null
     private var loadedModel: BackTapModel? = null
     private var loadedLowPower: Boolean? = null
 
@@ -78,11 +80,15 @@ class BackTapEngine(
     private var lastTriggerElapsedMs = 0L
     private var receiverRegistered = false
     private var destroyed = false
-    private var lockPollStep = 0
 
     private val lockPollRunnable = Runnable {
         if (destroyed) return@Runnable
         evaluateStateLocked(forceResubscribe = true, fromLockPoll = true)
+    }
+
+    private val userPresentRecheckRunnable = Runnable {
+        if (destroyed) return@Runnable
+        evaluateStateLocked(forceResubscribe = true)
     }
 
     private val sensorListener = object : SensorEventListener {
@@ -107,10 +113,15 @@ class BackTapEngine(
     private val stateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (destroyed) return
-            val forceResubscribe = intent?.action == Intent.ACTION_SCREEN_ON ||
-                intent?.action == Intent.ACTION_USER_PRESENT
+            val action = intent?.action
+            val forceResubscribe = action == Intent.ACTION_SCREEN_ON
+            diag { "Broadcast: $action interactive=${powerManager.isInteractive} locked=${keyguardManager.isKeyguardLocked}" }
             sensorHandler.post {
                 evaluateStateLocked(forceResubscribe = forceResubscribe)
+                if (action == Intent.ACTION_USER_PRESENT && !powerManager.isInteractive) {
+                    sensorHandler.removeCallbacks(userPresentRecheckRunnable)
+                    sensorHandler.postDelayed(userPresentRecheckRunnable, USER_PRESENT_RECHECK_MS)
+                }
             }
         }
     }
@@ -133,7 +144,8 @@ class BackTapEngine(
                 return@post
             }
 
-            if (accelerometer == null || gyroscope == null) {
+            val needGyro = settings.backTapModel.requiresGyroscope
+            if (accelerometer == null || (needGyro && gyroscope == null)) {
                 stopListeningLocked()
                 publishStatus(BackTapStatus.UNSUPPORTED)
                 return@post
@@ -150,20 +162,24 @@ class BackTapEngine(
                 val newClassifier = TfliteBackTapClassifier(
                     context = appContext,
                     assetPath = settings.backTapModel.assetPath,
-                    useLowPowerDelegate = settings.backTapLowPowerDelegate
+                    useLowPowerDelegate = settings.backTapLowPowerDelegate,
+                    isSamsung = settings.backTapModel.isSamsung
                 )
                 classifier = newClassifier
                 loadedModel = settings.backTapModel
                 loadedLowPower = settings.backTapLowPowerDelegate
 
-                val existingDetector = detector
-                if (existingDetector == null) {
-                    detector = BackTapDetector(newClassifier).apply {
+                val diagLogger: ((String) -> Unit)? = if (BuildConfig.DEBUG) {
+                    { msg -> Log.d(DIAG_TAG, msg) }
+                } else {
+                    null
+                }
+                detector = if (settings.backTapModel.isSamsung) {
+                    SamsungBackTapDetector(newClassifier, settings.backTapSensitivity, diagLogger)
+                } else {
+                    BackTapDetector(newClassifier, diagLogger).apply {
                         configure(settings.backTapSensitivity)
                     }
-                } else {
-                    existingDetector.replaceClassifier(newClassifier)
-                    existingDetector.configure(settings.backTapSensitivity)
                 }
                 if (wasListening) {
                     evaluateStateLocked(forceResubscribe = true)
@@ -183,6 +199,7 @@ class BackTapEngine(
         unregisterReceiverIfNeeded()
         sensorHandler.post {
             cancelLockPollLocked()
+            sensorHandler.removeCallbacks(userPresentRecheckRunnable)
             stopListeningLocked()
             releaseModelLocked()
             publishStatus(BackTapStatus.DISABLED)
@@ -203,7 +220,8 @@ class BackTapEngine(
             publishStatus(BackTapStatus.DISABLED)
             return
         }
-        if (accelerometer == null || gyroscope == null) {
+        val needGyro = detector?.requiresGyroscope ?: s.backTapModel.requiresGyroscope
+        if (accelerometer == null || (needGyro && gyroscope == null)) {
             cancelLockPollLocked()
             stopListeningLocked()
             publishStatus(BackTapStatus.UNSUPPORTED)
@@ -235,21 +253,18 @@ class BackTapEngine(
     }
 
     private fun scheduleNextLockPollLocked() {
-        if (lockPollStep >= LOCK_POLL_DELAYS_MS.size) return
-        val delayMs = LOCK_POLL_DELAYS_MS[lockPollStep]
-        lockPollStep++
         sensorHandler.removeCallbacks(lockPollRunnable)
-        sensorHandler.postDelayed(lockPollRunnable, delayMs)
+        sensorHandler.postDelayed(lockPollRunnable, LOCK_POLL_INTERVAL_MS)
     }
 
     private fun cancelLockPollLocked() {
         sensorHandler.removeCallbacks(lockPollRunnable)
-        lockPollStep = 0
     }
 
     private fun startListeningLocked() {
         val acc = accelerometer ?: return
-        val gyro = gyroscope ?: return
+        val needGyro = detector?.requiresGyroscope ?: currentSettings.backTapModel.requiresGyroscope
+        val gyro = if (needGyro) gyroscope ?: return else null
         if (isListening) {
             sensorManager.unregisterListener(sensorListener)
             isListening = false
@@ -259,19 +274,26 @@ class BackTapEngine(
         val targetPeriodUs = maxOf(
             TARGET_SAMPLING_PERIOD_US,
             acc.minDelay.coerceAtLeast(0),
-            gyro.minDelay.coerceAtLeast(0)
+            gyro?.minDelay?.coerceAtLeast(0) ?: 0
         )
 
-        val ok = registerSensors(acc, gyro, targetPeriodUs, FIFO_BATCH_LATENCY_US) ||
-            registerSensors(acc, gyro, targetPeriodUs, 0) ||
-            registerSensors(acc, gyro, FALLBACK_SAMPLING_PERIOD_US, 0)
+        var usedPeriod = targetPeriodUs
+        var ok = registerSensors(acc, gyro, targetPeriodUs, FIFO_BATCH_LATENCY_US)
+        if (!ok && FIFO_BATCH_LATENCY_US > 0) {
+            ok = registerSensors(acc, gyro, targetPeriodUs, 0)
+        }
+        if (!ok) {
+            usedPeriod = FALLBACK_SAMPLING_PERIOD_US
+            ok = registerSensors(acc, gyro, FALLBACK_SAMPLING_PERIOD_US, 0)
+        }
 
         isListening = ok
+        diag { "Sensors start: ok=$ok gyro=$needGyro periodUs=$usedPeriod batchUs=$FIFO_BATCH_LATENCY_US" }
     }
 
     private fun registerSensors(
         acc: Sensor,
-        gyro: Sensor,
+        gyro: Sensor?,
         periodUs: Int,
         batchLatencyUs: Int
     ): Boolean {
@@ -283,13 +305,17 @@ class BackTapEngine(
                 batchLatencyUs,
                 sensorHandler
             )
-            val gyroOk = sensorManager.registerListener(
-                sensorListener,
-                gyro,
-                periodUs,
-                batchLatencyUs,
-                sensorHandler
-            )
+            val gyroOk = if (gyro != null) {
+                sensorManager.registerListener(
+                    sensorListener,
+                    gyro,
+                    periodUs,
+                    batchLatencyUs,
+                    sensorHandler
+                )
+            } else {
+                true
+            }
             if (accOk && gyroOk) {
                 true
             } else {
@@ -309,6 +335,7 @@ class BackTapEngine(
         if (isListening) {
             runCatching { sensorManager.unregisterListener(sensorListener) }
             isListening = false
+            diag { "Sensors stopped" }
         }
         detector?.reset()
     }
@@ -320,16 +347,27 @@ class BackTapEngine(
         loadedLowPower = null
     }
 
-    private fun handleDoubleTapCandidate(det: BackTapDetector) {
+    private fun handleDoubleTapCandidate(det: TapDetectorStrategy) {
         val now = SystemClock.elapsedRealtime()
-        if (now - lastTriggerElapsedMs < TRIGGER_COOLDOWN_MS) return
+        val elapsedSinceLast = now - lastTriggerElapsedMs
+        if (elapsedSinceLast < TRIGGER_COOLDOWN_MS) {
+            diag { "DoubleTap blocked: cooldown=${elapsedSinceLast}ms" }
+            return
+        }
 
         val s = currentSettings
-        if (s.backTapTableGate && det.isFlatOnTable) return
-        if (s.backTapPocketGate && isPocketBlocked()) return
+        if (s.backTapTableGate && det.isFlatOnTable) {
+            diag { "DoubleTap blocked: tableGate" }
+            return
+        }
+        if (s.backTapPocketGate && isPocketBlocked()) {
+            diag { "DoubleTap blocked: pocketGate" }
+            return
+        }
 
         lastTriggerElapsedMs = now
         _runtimeState.value = _runtimeState.value.copy(lastTriggeredAtMs = System.currentTimeMillis())
+        diag { "DoubleTap DISPATCHED -> mainHandler" }
         mainHandler.post {
             if (!destroyed) {
                 onDoubleTap()
@@ -343,12 +381,14 @@ class BackTapEngine(
     private fun isPocketBlocked(): Boolean {
         val prox = proximitySensor ?: return false
         var near = false
+        var rawValue = -1f
         val latch = CountDownLatch(1)
         val listener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent?) {
                 if (event != null && event.values.isNotEmpty()) {
+                    rawValue = event.values[0]
                     val threshold = min(prox.maximumRange, 5f)
-                    near = event.values[0] < threshold
+                    near = rawValue < threshold
                 }
                 sensorManager.unregisterListener(this)
                 latch.countDown()
@@ -364,7 +404,8 @@ class BackTapEngine(
                 proximityHandler
             )
             if (!registered) return false
-            latch.await(PROXIMITY_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            val received = latch.await(PROXIMITY_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            diag { "Pocket check: received=$received raw=$rawValue max=${prox.maximumRange} near=$near" }
             near
         } catch (_: Throwable) {
             false
@@ -401,17 +442,26 @@ class BackTapEngine(
     private fun publishStatus(status: BackTapStatus) {
         val prev = _runtimeState.value
         if (prev.status != status) {
+            diag { "Status: ${prev.status} -> $status" }
             _runtimeState.value = prev.copy(status = status)
         }
     }
 
+    private inline fun diag(msg: () -> String) {
+        if (BuildConfig.DEBUG) {
+            Log.d(DIAG_TAG, msg())
+        }
+    }
+
     companion object {
+        private const val DIAG_TAG = "BackTapDiag"
         private const val TARGET_SAMPLING_PERIOD_US = 2500
         private const val FALLBACK_SAMPLING_PERIOD_US = 5000
-        private const val FIFO_BATCH_LATENCY_US = 20_000
+        private const val FIFO_BATCH_LATENCY_US = 0
         private const val TRIGGER_COOLDOWN_MS = 650L
         private const val PROXIMITY_TIMEOUT_MS = 30L
-        private val LOCK_POLL_DELAYS_MS = longArrayOf(400L, 800L, 1300L)
+        private const val LOCK_POLL_INTERVAL_MS = 1000L
+        private const val USER_PRESENT_RECHECK_MS = 300L
 
         private val _runtimeState = MutableStateFlow(BackTapRuntimeState())
         val runtimeState: StateFlow<BackTapRuntimeState> = _runtimeState.asStateFlow()

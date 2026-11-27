@@ -6,6 +6,7 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.KeyEvent
@@ -41,6 +42,7 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.quickstart.md3.BuildConfig
 import com.quickstart.md3.QuickStartApp
 import com.quickstart.md3.R
 import com.quickstart.md3.data.AppSettings
@@ -74,6 +76,7 @@ class OverlayPanelHost(
 
     fun show(initialSearchMode: SearchMode? = null, initialTab: MainTab? = null) {
         runOnMain {
+            if (BuildConfig.DEBUG) Log.d(DIAG_TAG, "OverlayPanelHost.show isShowing=${activeSession != null}")
             if (activeSession != null) {
                 viewModel.resetForReopen(initialSearchMode, initialTab)
                 return@runOnMain
@@ -87,7 +90,9 @@ class OverlayPanelHost(
                 sharedStore = sharedViewModelStore,
                 onRequestHide = { hide() }
             )
-            if (session.attach(wm)) {
+            val attached = session.attach(wm)
+            if (BuildConfig.DEBUG) Log.d(DIAG_TAG, "OverlayPanelHost.attach=$attached")
+            if (attached) {
                 activeSession = session
             } else {
                 session.detach(wm)
@@ -97,6 +102,7 @@ class OverlayPanelHost(
 
     fun hide() {
         runOnMain {
+            if (BuildConfig.DEBUG) Log.d(DIAG_TAG, "OverlayPanelHost.hide isShowing=${activeSession != null}")
             val session = activeSession ?: return@runOnMain
             activeSession = null
             val wm = windowManager
@@ -110,8 +116,13 @@ class OverlayPanelHost(
 
     fun toggle() {
         runOnMain {
+            if (BuildConfig.DEBUG) Log.d(DIAG_TAG, "OverlayPanelHost.toggle isShowing=$isShowing")
             if (isShowing) hide() else show()
         }
+    }
+
+    companion object {
+        private const val DIAG_TAG = "BackTapDiag"
     }
 
     fun destroy() {
